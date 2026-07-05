@@ -32,11 +32,11 @@ dev = [
     "black",
 ]
 
-[tool.setuptools]
-packages = ["xrobotoolkit_teleop"]
-
 [tool.setuptools.package-data]
 xrobotoolkit_teleop = ["../assets/**/*"]
+
+[tool.setuptools.packages.find]
+include = ["xrobotoolkit_teleop*"]
 
 [tool.black]
 line-length = 120

@@ -10,6 +10,10 @@ class XrClient:
         xrt.init()
         print("XRoboToolkit SDK initialized.")
 
+    def close(self):
+        """Closes the XR SDK client connection."""
+        xrt.close()
+
     def get_pose_by_name(self, name: str) -> np.ndarray:
         """Returns the pose of the specified device by name.
         Valid names: "left_controller", "right_controller", "headset".
