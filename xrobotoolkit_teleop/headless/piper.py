@@ -94,6 +94,8 @@ class DualPiperJointTargetProvider(BaseTeleopController):
 
     def _placo_setup(self) -> None:
         super()._placo_setup()
+        self.solver.enable_joint_limits(True)
+        self.solver.enable_velocity_limits(True)
         self._arm_joint_names = {}
         self._all_output_joint_names = []
         for arm_name, config in self.manipulator_config.items():
@@ -111,7 +113,8 @@ class DualPiperJointTargetProvider(BaseTeleopController):
         pass
 
     def _update_robot_state(self) -> None:
-        for joint_name, joint_pos in self._current_positions.items():
+        for joint_name in self._all_output_joint_names:
+            joint_pos = self._current_positions[joint_name]
             _set_placo_joint_position(self.placo_robot, joint_name, joint_pos)
         self.placo_robot.update_kinematics()
 
@@ -125,7 +128,9 @@ class DualPiperJointTargetProvider(BaseTeleopController):
                         self.placo_robot, joint_name
                     )
                 else:
-                    targets[joint_name] = self._target_positions[joint_name]
+                    targets[joint_name] = self._target_positions.get(
+                        joint_name, self._current_positions[joint_name]
+                    )
 
         for gripper_name, gripper_target in self.gripper_pos_target.items():
             for joint_name, joint_pos in gripper_target.items():
@@ -143,9 +148,24 @@ class DualPiperJointTargetProvider(BaseTeleopController):
         self, current_positions: Mapping[str, float]
     ) -> JointTargetCommand:
         """Update teleoperation once and return target joint positions by name."""
-        self._current_positions.update(
-            {name: float(value) for name, value in current_positions.items()}
-        )
+        provided = {
+            name: float(current_positions[name])
+            for name in self._all_output_joint_names
+            if name in current_positions
+        }
+        missing = [
+            name for name in self._all_output_joint_names if name not in provided
+        ]
+        if missing:
+            raise ValueError(
+                "current_positions is missing PiPER joints: " + ", ".join(missing)
+            )
+        nonfinite = [name for name, value in provided.items() if not np.isfinite(value)]
+        if nonfinite:
+            raise ValueError(
+                "current joint positions must be finite: " + ", ".join(nonfinite)
+            )
+        self._current_positions.update(provided)
         self._initialize_targets_from_current_positions()
         self._update_ik()
         self._update_gripper_target()
@@ -191,6 +211,8 @@ def create_dual_piper_joint_target_provider(
     manipulator_config: dict[str, dict[str, Any]] | None = None,
 ) -> DualPiperJointTargetProvider:
     """Create the default dual-PiPER joint-target provider."""
+    if not np.isfinite(control_rate_hz) or control_rate_hz <= 0.0:
+        raise ValueError("control_rate_hz must be a positive finite value")
     return DualPiperJointTargetProvider(
         robot_urdf_path=urdf_path,
         manipulator_config=manipulator_config,

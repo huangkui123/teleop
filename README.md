@@ -50,6 +50,24 @@ python scripts/simulation/teleop_x7s_placo.py
 ```
 This script initializes the [`PlacoTeleopController`](xrobotoolkit_teleop/simulation/placo_teleop_controller.py) with the X7S robot and starts the teleoperation loop.
 
+To inspect the dual-PiPER hardware mapping without connecting to the AgileX
+computer, run its kinematic twin. Use the same control flags as the hardware
+entry point so the XR mapping, IK, joint conversion, limits, and Grip/Trigger
+behavior are directly comparable:
+
+```bash
+# Recommended first: verify translation axes only
+python scripts/simulation/teleop_dual_piper_placo.py --position-only
+
+# Then verify the full 6-DoF pose mapping
+python scripts/simulation/teleop_dual_piper_placo.py
+```
+
+The script prints the MeshCat URL and opens it automatically. In MeshCat, the
+robot shows the simulated joint command, opaque end-effector axes show the
+actual simulated pose, and translucent axes show the active IK target. This
+simulation does not open SSH or publish any ROS command.
+
 ### Running Dexterous Hand Teleop Simulation
 - Shadow hand simulation in Mujoco
     ```bash
@@ -93,6 +111,102 @@ python scripts/hardware/teleop_dual_arx_r5_hardware.py
 ```
 
 This script initializes the [`ARXR5TeleopController`](xrobotoolkit_teleop/hardware/arx_r5_teleop_controller.py) for dual arm control with built-in grippers.
+
+### Running Dual PiPER Hardware over SSH
+
+The PiPER entry point keeps XR and IK on this computer and runs a lightweight
+ROS 1 bridge through one persistent SSH session. The AgileX computer must
+already be reachable through the `agilex` SSH alias, and its two PiPER nodes
+must expose the default feedback and command topics.
+
+Run a read-only pre-flight check first. It validates SSH, both feedback topics,
+arm fault status, command subscribers, and conflicting publishers without
+sending a motion command:
+
+```bash
+conda activate xrobotoolkit
+python scripts/hardware/teleop_dual_piper_ssh.py --check
+```
+
+Run the full XR/IK loop without commanding hardware:
+
+```bash
+python scripts/hardware/teleop_dual_piper_ssh.py
+```
+
+After checking the workspace and hardware emergency stop, explicitly enable
+physical command publication. Position-only mode is a conservative first test:
+
+```bash
+python scripts/hardware/teleop_dual_piper_ssh.py --execute --position-only
+```
+
+`--position-only` only applies controller translation to the end effector and
+holds the wrist orientation measured when Grip is pressed. This avoids the
+unconstrained wrist motion that a position-only IK task would otherwise allow.
+
+Both grip buttons must be released at startup. Hold the left or right grip to
+move only that arm; releasing it replaces the outstanding goal with measured
+joint feedback. Triggers control the grippers. `Ctrl+C` sends a final measured
+position hold before closing SSH. The remote command watchdog, feedback timeout,
+joint limits, slew limits, and tracking-error limits are software safeguards,
+not a replacement for a hardware emergency stop. This entry point does not
+publish `/enable_flag`; motor enable/disable remains the responsibility of the
+PiPER launch process on the AgileX computer.
+
+### Running Dual PiPER Directly on the AgileX ROS Computer
+
+Use the local ROS 1 entry point when this repository and the XR/IK environment
+are installed on the AgileX computer itself:
+
+```bash
+cd /home/agilex/XRoboToolkit-Teleop-Sample-Python
+python scripts/hardware/teleop_dual_piper_ros1.py --check
+```
+
+This path does not open an SSH connection. The XR/Placo process starts a local
+system-Python subprocess, which imports ROS Noetic and `piper_msgs` and talks to
+the local ROS master. Keeping the two Python processes separate avoids mixing
+ROS Noetic's Python 3.8 packages with the newer Python environment used by
+Placo and XRoboToolkit. The entry point also detects a terminal that has
+already sourced ROS and restarts the XR/IK process without the inherited
+`PYTHONPATH` and `LD_LIBRARY_PATH`; the ROS subprocess still receives its own
+Noetic environment.
+
+The PiPER driver must already be running:
+
+```bash
+source /opt/ros/noetic/setup.bash
+source /home/agilex/cobot_magic/Piper_ros_private-ros-noetic/devel/setup.bash
+roslaunch piper start_ms_piper.launch mode:=1 auto_enable:=true
+```
+
+Use a native CPython 3.10 environment for the main teleoperation process. Do
+not use a GraalPython environment. On the AgileX computer, use the provided
+minimal installer (it avoids the unrelated MuJoCo, camera, and Torch runtime
+dependencies):
+
+```bash
+source /home/agilex/miniconda3/etc/profile.d/conda.sh
+cd /home/agilex/XRoboToolkit-Teleop-Sample-Python
+bash scripts/hardware/setup_piper_agilex_env.sh
+conda activate xrobotoolkit-native
+```
+
+Run without `--execute` first to exercise XR and IK without publishing physical
+commands. For the first physical test, use one arm at a time with reduced scale
+and speed:
+
+```bash
+python scripts/hardware/teleop_dual_piper_ros1.py --position-only
+
+python scripts/hardware/teleop_dual_piper_ros1.py \
+  --execute --position-only --scale-factor 0.3 --max-joint-speed 0.25
+```
+
+The direct entry point has the same dead-man Grip behavior, joint and gripper
+limits, tracking-error limits, status checks, publisher-conflict detection, and
+command watchdog as the SSH entry point.
 
 ### Running Galaxea R1 Lite Humanoid Demo
 

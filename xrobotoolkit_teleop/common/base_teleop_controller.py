@@ -139,8 +139,18 @@ class BaseTeleopController(abc.ABC):
 
         # Set up end effector tasks
         for name, config in self.manipulator_config.items():
-            # Get control mode (default to "pose" for backward compatibility)
+            # Get control mode (default to "pose" for backward compatibility).
+            # ``position_fixed_orientation`` uses a frame task too, but ignores
+            # controller rotation while keeping the activation-time orientation.
             control_mode = config.get("control_mode", "pose")
+            if control_mode not in {
+                "pose",
+                "position",
+                "position_fixed_orientation",
+            }:
+                raise ValueError(
+                    f"Unsupported control mode for {name}: {control_mode!r}"
+                )
             self.effector_control_mode[name] = control_mode
             
             ee_xyz, ee_quat = self._get_link_pose(config["link_name"])
@@ -201,6 +211,20 @@ class BaseTeleopController(abc.ABC):
                     # Position-only control: only apply position delta
                     target_xyz = self.ref_ee_xyz[src_name] + delta_xyz
                     self.effector_task[src_name].target_world = target_xyz
+                elif (
+                    self.effector_control_mode[src_name]
+                    == "position_fixed_orientation"
+                ):
+                    # Translation-only teleoperation must still constrain the
+                    # wrist.  Leaving orientation unconstrained lets the IK
+                    # rotate the wrist arbitrarily while optimizing secondary
+                    # tasks, which is especially unsafe on real hardware.
+                    target_xyz = self.ref_ee_xyz[src_name] + delta_xyz
+                    target_pose = tf.quaternion_matrix(
+                        self.ref_ee_quat[src_name]
+                    )
+                    target_pose[:3, 3] = target_xyz
+                    self.effector_task[src_name].T_world_frame = target_pose
                 else:
                     # Full pose control: apply both position and orientation deltas
                     target_xyz, target_quat = apply_delta_pose(
